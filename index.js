@@ -16,7 +16,8 @@ const MODULE = 'breeze_player_v3';
 const NAME = 'Breeze Player';
 const DEFAULTS = { rate: 1, continue: true, autoscroll: true, expand: false };
 const RATES = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
-const BUTTON_HTML = '<div title="Breeze Player: play this message\'s audio" class="mes_button sbp_play fa-solid fa-headphones-simple"></div>';
+// fa-file-audio, not a headphones icon: ST-breeze-tts-director puts fa-headphones on the same menu.
+const BUTTON_HTML = '<div title="Breeze Player: play this message\'s attached audio" class="mes_button sbp_play fa-solid fa-file-audio"></div>';
 const RESUME_KEY = 'breeze_player_v3_resume';
 const RESUME_LIMIT = 300;
 
@@ -85,6 +86,7 @@ const player = {
     },
     async play(at = null) {
         if (!this.entry) return;
+        pauseOthers();
         if (at != null) this.audio.currentTime = at;
         this.audio.playbackRate = settings().rate;
         try { await this.audio.play(); } catch (e) {
@@ -99,6 +101,38 @@ const player = {
     },
     get playing() { return !!this.entry && !this.audio.paused && !this.audio.ended; },
 };
+
+// ------------------------------------------------------------------ one voice at a time
+// ST-breeze-tts-director (its panel player and its TTS provider) and SillyTavern's own narration play through their
+// own audio elements, some of them outside the DOM. Wrap HTMLMediaElement.play once so that whichever starts speaking,
+// the other stops: another speech element starting pauses Breeze Player, and Breeze Player starting pauses the speech
+// element that played last. Looping media (background music, ambience) is left alone both ways.
+const others = new Set(); // speech elements seen playing, held weakly enough: dropped when they end or pause
+
+function installExclusivePlayback() {
+    const proto = HTMLMediaElement.prototype;
+    if (proto.play.__sbpWrapped) return;
+    const original = proto.play;
+    const wrapped = function (...args) {
+        if (this !== player.audio && !this.loop && this instanceof HTMLAudioElement) {
+            others.add(this);
+            const drop = () => others.delete(this);
+            this.addEventListener('pause', drop, { once: true });
+            this.addEventListener('ended', drop, { once: true });
+            if (player.playing) { player.pause(); repaintAll(); }
+        }
+        return original.apply(this, args);
+    };
+    wrapped.__sbpWrapped = true;
+    proto.play = wrapped;
+}
+
+function pauseOthers() {
+    for (const el of others) { try { if (!el.paused) el.pause(); } catch { /* gone */ } }
+    others.clear();
+    // SillyTavern's narration queue only advances when a line ends, so a paused line holds the queue where it is.
+    // Its menu button is deliberately not pressed: when it thinks nothing is playing it starts the last message.
+}
 
 // ------------------------------------------------------------------ panels
 
@@ -377,6 +411,7 @@ function onChatChanged() {
 jQuery(() => {
     try {
         bindSettings();
+        installExclusivePlayback();
         addButtons();
         registerSlashCommands();
         $(document).on('click', '.sbp_play', async function (ev) {

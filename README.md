@@ -19,7 +19,7 @@ This extension only plays what is attached. It makes no model or TTS calls and n
 
 ## Use
 
-- Messages with audio get a headphones button in their **⋯** menu. It opens a panel: play/pause,
+- Messages with audio get a file-audio button in their **⋯** menu. It opens a panel: play/pause,
   previous/next paragraph, stop, speed, **Continue** (go on to the next message with audio), and one row per
   paragraph showing who speaks. Click a row to play from there.
 - The paragraph being read is highlighted and kept in view. Where you stopped is remembered per message,
@@ -32,8 +32,24 @@ This extension only plays what is attached. It makes no model or TTS calls and n
 ## Install
 
 Extensions → Install extension → `https://github.com/NarpasSword/st-breeze-player`.
-Disable ST-breeze-tts-director's player if you don't need its live TTS any more. They don't conflict:
-the slash commands, CSS classes and settings keys are all different.
+
+## Using it alongside ST-breeze-tts-director
+
+Both can be installed at the same time, and the e2e test checks that they work together:
+
+- **No shared names.** The two extensions use different globals (`breezePlayer` vs `breezeTts` / `breezeDirector` /
+  `breezeExplain`), slash commands (`/breeze-play|stop|info` vs `/breeze-direct|cast|audio|blank`), settings keys
+  (`breeze_player_v3` vs `breeze_director` / `breeze_player`), message fields (`breeze_audio` vs `breeze_direction` /
+  `breeze_skip`), CSS classes (`sbp_*`) and storage (one localStorage key vs IndexedDB `breeze-tts`).
+- **Different buttons.** Breeze Player's button is a file-audio icon. The director's player keeps its headphones,
+  and its masks button stays as it is.
+- **One voice at a time.** When the director's player, its TTS provider or SillyTavern's narration starts speaking,
+  Breeze Player pauses, and starting Breeze Player pauses them. Looping media such as background music and
+  ambience is left alone. SillyTavern's narration queue only pauses: it holds its place until you press its own
+  stop or play button.
+- **Each extension leaves the other's data alone.** The director's take commands (`/breeze-blank` and so on) only
+  touch `breeze_direction`. Attached audio survives them, and it is saved along with the chat whenever the chat is
+  saved.
 
 ## Data format (`message.extra.breeze_audio`)
 

@@ -14,7 +14,7 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
 const browser = await chromium.launch({ headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 const errors = [];
-page.on('console', (m) => { if (m.type() === 'error' && /breeze|sbp|player/i.test(m.text())) errors.push(m.text().slice(0, 200)); });
+page.on('console', (m) => { if (m.type() === 'error' && /breeze|sbp|player|director/i.test(m.text())) errors.push(m.text().slice(0, 200)); });
 page.on('pageerror', (e) => errors.push(String(e).slice(0, 200)));
 // Never let the page write anything during the test.
 await page.route('**/api/**', (route) => {
@@ -130,6 +130,45 @@ await page.waitForTimeout(300);
 const warn = await page.$$eval(`#chat .mes[mesid="${last}"] .sbp_warn`, (r) => r.map((x) => x.textContent));
 check('edited message shows outdated', warn.length === 1 && /text changed/.test(warn[0]), JSON.stringify(warn));
 await page.screenshot({ path: `${OUT}/outdated.png` });
+
+// ---- living alongside ST-breeze-tts-director (only when it is installed in the same ST) ----
+const legacy = await page.evaluate(() => !!globalThis.breezeTts);
+if (legacy) {
+    const g = await page.evaluate(() => ({ tts: typeof globalThis.breezeTts?.getClip, director: typeof globalThis.breezeDirector,
+        explain: typeof globalThis.breezeExplain, player: typeof globalThis.breezePlayer?.playMessage }));
+    check('legacy: both extensions loaded, globals intact', g.tts === 'function' && g.director === 'function' && g.explain === 'function' && g.player === 'function', JSON.stringify(g));
+    const cmds = await page.evaluate(() => { const c = SillyTavern.getContext().SlashCommandParser.commands;
+        return ['breeze-direct', 'breeze-cast', 'breeze-audio', 'breeze-blank', 'breeze-play', 'breeze-stop', 'breeze-info'].filter((n) => !c[n]); });
+    check('legacy: all seven slash commands registered', cmds.length === 0, `missing ${JSON.stringify(cmds)}`);
+    const icons = await page.evaluate((id) => [...document.querySelectorAll(`#chat .mes[mesid="${id}"] .extraMesButtons .mes_button`)]
+        .map((b) => b.className).filter((c) => /breeze|sbp/.test(c)), last);
+    check('legacy: both message buttons present, different icons', icons.some((c) => /sbp_play/.test(c) && /fa-file-audio/.test(c)) &&
+        icons.some((c) => /mes_breeze_play/.test(c)) && !icons.some((c) => /sbp_play/.test(c) && /fa-headphones/.test(c)), JSON.stringify(icons));
+    // Exclusive playback: another speech element starting pauses Breeze Player, and the reverse; looping music is left alone.
+    const ex = await page.evaluate(async (id) => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const url = SillyTavern.getContext().chat[id].extra.breeze_audio.url;
+        await breezePlayer.playMessage(id); await sleep(800);
+        const other = new Audio(url); await other.play(); await sleep(500);
+        const pausedByOther = breezePlayer.player.audio.paused;
+        await breezePlayer.player.play(); await sleep(500);
+        const otherPausedByUs = other.paused;
+        const music = new Audio(url); music.loop = true; await music.play(); await sleep(500);
+        const musicLeftAlone = !breezePlayer.player.audio.paused && !music.paused;
+        music.pause(); other.pause(); breezePlayer.player.stop();
+        return { pausedByOther, otherPausedByUs, musicLeftAlone };
+    }, last);
+    check('legacy: one voice at a time (and music left alone)', ex.pausedByOther && ex.otherPausedByUs && ex.musicLeftAlone, JSON.stringify(ex));
+    // The old extension's take commands touch only breeze_direction; the attached audio must survive them.
+    const kept = await page.evaluate(async (id) => {
+        const before = JSON.stringify(SillyTavern.getContext().chat[id].extra.breeze_audio);
+        const r = await SillyTavern.getContext().executeSlashCommandsWithOptions(`/breeze-blank ${id}`);
+        const m = SillyTavern.getContext().chat[id];
+        return { same: JSON.stringify(m.extra.breeze_audio) === before, blanked: r.pipe, direction: !!m.extra.breeze_direction };
+    }, last);
+    check('legacy: /breeze-blank leaves breeze_audio untouched', kept.same && kept.direction, JSON.stringify(kept));
+    await page.screenshot({ path: `${OUT}/legacy.png` });
+}
 
 check('no extension errors in the console', errors.length === 0, errors.join(' | '));
 fs.writeFileSync(`${OUT}/e2e.json`, JSON.stringify(results, null, 1));
