@@ -182,7 +182,9 @@ async function openPanel(id, { play = false, version = 0 } = {}) {
     cont.title = 'Go on to the next message with audio when this one ends';
     const status = el('span', 'sbp_status');
     const close = iconButton('fa-xmark', 'Close', () => closePanel(id));
-    bar.append(playBtn, prevBtn, nextBtn, stopBtn, rate, cont, status, close);
+    const delBtn = iconButton('fa-trash-can', vers.length > 1 ? 'Delete this version of the audio' : 'Delete this message\'s audio', () => deleteAudio(id, version));
+    delBtn.classList.add('sbp_delete');
+    bar.append(playBtn, prevBtn, nextBtn, stopBtn, rate, cont, status, delBtn, close);
 
     const info = el('div', 'sbp_info');
     const qa = qaLabel(entry.qa);
@@ -242,6 +244,80 @@ async function openPanel(id, { play = false, version = 0 } = {}) {
 }
 
 function repaintAll() { for (const p of panels.values()) p.repaint(); }
+
+// ------------------------------------------------------------------ deleting audio
+// Deletes one version of a message's audio: the mp3 in the user's files (through SillyTavern's own
+// /api/files/delete, as the logged-in user) and its entry on the message, then saves the chat. Deleting the current
+// version promotes the newest older one; deleting the last leaves the message without audio. A file that another
+// entry in the chat still points at is kept. Asks first unless `confirmed`.
+
+function urlsInUse(exceptId, exceptEntry) {
+    const used = new Set();
+    (ctx().chat || []).forEach((m, i) => {
+        const a = m?.extra?.breeze_audio;
+        if (!isEntry(a)) return;
+        for (const e of [a, ...(a.history || [])]) if (!(i === exceptId && e === exceptEntry) && e?.url) used.add(e.url);
+    });
+    return used;
+}
+
+async function confirmDelete(text) {
+    const c = ctx();
+    try {
+        if (c.callGenericPopup && c.POPUP_TYPE) return !!(await c.callGenericPopup(text, c.POPUP_TYPE.CONFIRM));
+    } catch { /* fall through */ }
+    return window.confirm(text);
+}
+
+async function removeFile(url) {
+    const c = ctx();
+    const headers = c.getRequestHeaders ? c.getRequestHeaders() : { 'Content-Type': 'application/json' };
+    const res = await fetch('/api/files/delete', { method: 'POST', headers, body: JSON.stringify({ path: url }) });
+    if (res.ok || res.status === 404) return res.ok ? 'deleted' : 'already gone';
+    throw new Error(`HTTP ${res.status}`);
+}
+
+async function deleteAudio(id, version = 0, { all = false, confirmed = false } = {}) {
+    const m = message(id);
+    const current = audioOf(id);
+    if (!m || !current) return 0;
+    const vers = versions(current).map(v => v.entry);
+    const doomed = all ? vers : [vers[Math.min(version, vers.length - 1)]];
+    if (!confirmed) {
+        const what = all || vers.length === 1 ? 'all audio attached to this message'
+            : (doomed[0] === current ? 'the current version of this message\'s audio (the newest older one takes its place)' : 'this older version of the audio');
+        if (!(await confirmDelete(`Delete ${what}? The file${doomed.length > 1 ? 's are' : ' is'} removed from your SillyTavern files. This can't be undone.`))) return 0;
+    }
+    if (player.id === id && doomed.includes(player.entry)) player.stop();
+
+    // The message without the doomed entries.
+    const keep = vers.filter(e => !doomed.includes(e));
+    if (keep.length) {
+        const [head, ...rest] = keep;
+        m.extra.breeze_audio = { ...head, history: rest.map(({ history, ...e }) => e) };
+    } else {
+        delete m.extra.breeze_audio;
+    }
+    const meta = ctx().chatMetadata?.breeze_audio;
+    if (meta && Array.isArray(meta.messages) && !keep.length) meta.messages = meta.messages.filter(x => x !== id);
+
+    // Files no other entry needs.
+    const inUse = urlsInUse(-1, null);
+    let removed = 0;
+    const failed = [];
+    for (const e of doomed) {
+        if (!e.url || inUse.has(e.url)) continue;
+        try { await removeFile(e.url); removed++; } catch (err) { failed.push(`${e.url} (${err.message})`); }
+    }
+    await ctx().saveChat();
+    closePanel(id);
+    markMessages();
+    summarize();
+    if (keep.length) await openPanel(id);
+    if (failed.length) toastr.warning(`Could not delete ${failed.join(', ')}. The message no longer points to it.`, NAME);
+    else toastr.success(`Deleted ${removed} audio file${removed === 1 ? '' : 's'}.`, NAME);
+    return removed;
+}
 
 function toggle(id, entry, forcePlay = false) {
     if (player.id === id && player.entry === entry) {
@@ -342,6 +418,19 @@ function registerSlashCommands() {
             callback: async () => { player.stop(); repaintAll(); return ''; },
         }));
         SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+            name: 'breeze-delete',
+            returns: 'number of audio files deleted',
+            namedArgumentList: c.SlashCommandNamedArgument ? [
+                new c.SlashCommandNamedArgument('all', 'delete every version, not just the current one', [ARGUMENT_TYPE.BOOLEAN], false),
+                new c.SlashCommandNamedArgument('confirm', 'false skips the confirmation (for scripts)', [ARGUMENT_TYPE.BOOLEAN], false),
+            ] : [],
+            unnamedArgumentList: [new SlashCommandArgument('message id; default the first message with audio', [ARGUMENT_TYPE.NUMBER], false)],
+            helpString: '<div>Delete a message\'s attached Breeze audio: the mp3 in your files and the entry on the message. ' +
+                'The current version by default, <code>all=true</code> for every version. Asks first unless <code>confirm=false</code>.</div>',
+            callback: async (args, value) => String(await deleteAudio(target(value), 0, {
+                all: String(args?.all) === 'true', confirmed: String(args?.confirm) === 'false' })),
+        }));
+        SlashCommandParser.addCommandObject(SlashCommand.fromProps({
             name: 'breeze-info',
             returns: 'a short summary of the audio attached to this chat',
             helpString: '<div>How many messages carry audio, their total length and QA.</div>',
@@ -426,7 +515,7 @@ jQuery(() => {
         }
         if (ev.MESSAGE_SWIPED) eventSource.on(ev.MESSAGE_SWIPED, (id) => { if (player.id === Number(id)) player.stop(); closePanel(Number(id)); refresh(); });
         if (ev.CHAT_CHANGED) eventSource.on(ev.CHAT_CHANGED, onChatChanged);
-        globalThis.breezePlayer = { player, openPanel, playMessage, audioMessages, panels };
+        globalThis.breezePlayer = { player, openPanel, playMessage, audioMessages, panels, deleteAudio };
     } catch (e) {
         console.error(`[${NAME}] failed to start`, e);
     }

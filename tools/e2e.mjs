@@ -9,6 +9,7 @@ const { chromium } = createRequire('/opt/st-drive/')('playwright');
 const [ST = 'http://127.0.0.1:8011', AVATAR = 'Testa.png', CHAT = 'Testa - storywriter - test - 2026-10-12', OUT = '/tmp/e2e'] = process.argv.slice(2);
 fs.mkdirSync(OUT, { recursive: true });
 const results = [];
+const intercepted = []; // writes the page tried (answered locally, never sent)
 const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail }); console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ` (${detail})` : ''}`); };
 
 const browser = await chromium.launch({ headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
@@ -22,7 +23,11 @@ await page.route('**/api/**', (route) => {
     const p = new URL(r.url()).pathname;
     // The chat and the audio files are what is under test: never let the page change them. (Run this against the
     // testbed only; settings and the character's last-chat pointer are allowed to change there.)
-    if (r.method() === 'POST' && /^\/api\/(chats\/(save|delete|rename)|files\/)/.test(p) && p !== '/api/files/verify') return route.fulfill({ status: 200, body: '{"ok":true}' });
+    if (r.method() === 'POST' && /^\/api\/(chats\/(save|delete|rename)|files\/)/.test(p) && p !== '/api/files/verify') {
+        let body = null; try { body = r.postDataJSON(); } catch { /* not json */ }
+        intercepted.push({ path: p, file: body?.path ?? null });
+        return route.fulfill({ status: 200, body: '{"ok":true}' });
+    }
     return route.continue();
 });
 await page.goto(ST, { waitUntil: 'domcontentloaded' });
@@ -169,6 +174,51 @@ if (legacy) {
     check('legacy: /breeze-blank leaves breeze_audio untouched', kept.same && kept.direction, JSON.stringify(kept));
     await page.screenshot({ path: `${OUT}/legacy.png` });
 }
+
+// ---- deleting audio (requests are intercepted: the testbed's files and chat stay as they are) ----
+// 1. Through the panel button and the confirmation popup, on a message with a single version.
+await page.evaluate(() => breezePlayer.player.stop());
+await page.evaluate(() => document.querySelectorAll('.sbp_panel').forEach((e) => e.remove()));
+await page.evaluate(() => breezePlayer.panels.clear());
+const delUrl = await page.evaluate((id) => SillyTavern.getContext().chat[id].extra.breeze_audio.url, first);
+await page.evaluate((id) => breezePlayer.openPanel(id), first);
+await page.waitForSelector(`#chat .mes[mesid="${first}"] .sbp_delete`);
+intercepted.length = 0;
+await page.click(`#chat .mes[mesid="${first}"] .sbp_delete`);
+const ok = page.locator('.popup .popup-button-ok').last();
+await ok.waitFor({ state: 'visible', timeout: 5000 }).then(() => ok.click(), () => {});
+await page.waitForFunction((id) => !SillyTavern.getContext().chat[id].extra?.breeze_audio && !document.querySelector(`#chat .mes[mesid="${id}"] .sbp_panel`), first, { timeout: 15000 }).catch(() => {});
+await page.waitForTimeout(500);
+const d1 = await page.evaluate((id) => ({ gone: !SillyTavern.getContext().chat[id].extra?.breeze_audio,
+    marked: document.querySelector(`#chat .mes[mesid="${id}"]`).classList.contains('sbp_has_audio'),
+    panel: !!document.querySelector(`#chat .mes[mesid="${id}"] .sbp_panel`) }), first);
+check('delete button: confirms, removes the entry, closes the panel', d1.gone && !d1.marked && !d1.panel, JSON.stringify(d1));
+check('delete button: deletes exactly that file and saves the chat',
+    intercepted.some((x) => x.path === '/api/files/delete' && x.file === delUrl) && intercepted.some((x) => x.path === '/api/chats/save') &&
+    intercepted.filter((x) => x.path === '/api/files/delete').length === 1, JSON.stringify(intercepted));
+// 2. Deleting the current version promotes the older one, and only the current file is deleted.
+const d2 = await page.evaluate(async (id) => {
+    const m = SillyTavern.getContext().chat[id];
+    const cur = m.extra.breeze_audio;
+    const older = { ...cur, url: cur.url.replace(/_([0-9a-f]{8})\.mp3$/, '_00000000.mp3'), rendered: '2026-10-01T10:00:00', history: undefined };
+    m.extra.breeze_audio = { ...cur, history: [older] };
+    const before = m.extra.breeze_audio.url;
+    const n = await breezePlayer.deleteAudio(id, 0, { confirmed: true });
+    return { n, before, now: m.extra.breeze_audio?.url, history: (m.extra.breeze_audio?.history || []).length, older: older.url };
+}, last);
+const files2 = intercepted.filter((x) => x.path === '/api/files/delete').map((x) => x.file);
+check('delete current version: older one takes its place', d2.now === d2.older && d2.history === 0 && d2.n === 1, JSON.stringify(d2));
+check('delete current version: only its own file is deleted', files2.includes(d2.before) && !files2.includes(d2.older), JSON.stringify(files2));
+// 3. A file another entry still uses is kept.
+const d3 = await page.evaluate(async (id) => {
+    const m = SillyTavern.getContext().chat[id];
+    const cur = m.extra.breeze_audio;
+    m.extra.breeze_audio = { ...cur, history: [{ ...cur, history: undefined, rendered: 'twin' }] };   // same url twice
+    return breezePlayer.deleteAudio(id, 1, { confirmed: true });
+}, last);
+check('a file still in use is not deleted', d3 === 0, `deleted ${d3}`);
+const cmd = await page.evaluate(() => !!SillyTavern.getContext().SlashCommandParser.commands['breeze-delete']);
+check('/breeze-delete registered', cmd);
 
 check('no extension errors in the console', errors.length === 0, errors.join(' | '));
 fs.writeFileSync(`${OUT}/e2e.json`, JSON.stringify(results, null, 1));

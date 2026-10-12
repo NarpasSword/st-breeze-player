@@ -24,7 +24,10 @@ This extension only plays what is attached. It makes no model or TTS calls and n
   paragraph showing who speaks. Click a row to play from there.
 - The paragraph being read is highlighted and kept in view. Where you stopped is remembered per message,
   in this browser.
-- `/breeze-play [message id]`, `/breeze-stop`, `/breeze-info`.
+- The trash button deletes the version of the audio you're viewing, after asking: the mp3 is removed from your
+  SillyTavern files and the entry from the message. If you delete the current version, the newest older one takes
+  its place. A file that another entry in the chat still uses is kept.
+- `/breeze-play [message id]`, `/breeze-stop`, `/breeze-info`, `/breeze-delete [message id] [all=true] [confirm=false]`.
 - If a message was edited, swiped, or split differently since its audio was made, the panel says
   **Outdated** and why. The audio still plays, but its timing may no longer match the rows.
 - Earlier renders of a message (up to 3) can be picked from the panel's version list.
