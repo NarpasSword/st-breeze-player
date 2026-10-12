@@ -1,0 +1,33 @@
+.mes .sbp_play { display: none; }
+.mes.sbp_has_audio .sbp_play { display: flex; }
+.mes.sbp_has_audio .extraMesButtons .sbp_play { color: var(--SmartThemeQuoteColor, inherit); }
+
+.sbp_panel {
+    margin: 6px 0 4px;
+    padding: 6px 8px;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 8px;
+    background: var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.15));
+    font-size: 0.92em;
+}
+.sbp_bar { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.sbp_btn { min-width: 30px; height: 28px; padding: 0 6px; margin: 0; display: inline-flex; align-items: center; justify-content: center; }
+.sbp_rate { width: auto; min-width: 64px; height: 28px; padding: 0 4px; margin: 0; }
+.sbp_cont { margin: 0 4px; gap: 4px; white-space: nowrap; }
+.sbp_status { flex: 1 1 auto; opacity: 0.85; font-variant-numeric: tabular-nums; min-width: 8em; }
+.sbp_info { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; align-items: center; }
+.sbp_badge { padding: 1px 8px; border-radius: 10px; border: 1px solid var(--SmartThemeBorderColor, #555); opacity: 0.85; }
+.sbp_warn { border-color: #c98a2b; color: #e0a040; opacity: 1; }
+.sbp_version { width: auto; height: 26px; margin: 0; padding: 0 4px; }
+
+.sbp_rows { max-height: 40vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.sbp_row { padding: 3px 6px; border-radius: 6px; cursor: pointer; border-left: 3px solid transparent; }
+.sbp_row:hover { background: rgba(127, 127, 127, 0.12); }
+.sbp_row.sbp_on { background: rgba(127, 127, 127, 0.22); border-left-color: var(--SmartThemeQuoteColor, #8ab4f8); }
+.sbp_row_head { display: flex; gap: 6px; align-items: center; font-size: 0.85em; opacity: 0.75; }
+.sbp_num { min-width: 1.6em; text-align: right; }
+.sbp_time { font-variant-numeric: tabular-nums; }
+.sbp_chip { padding: 0 6px; border-radius: 8px; border: 1px solid var(--SmartThemeBorderColor, #555); }
+.sbp_compact .sbp_text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sbp_compact .sbp_row.sbp_on .sbp_text { white-space: normal; }
+.sbp_summary { margin-top: 6px; opacity: 0.8; }

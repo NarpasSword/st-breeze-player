@@ -1,0 +1,11 @@
+{
+    "display_name": "Breeze Player",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "narpas",
+    "version": "3.0.0",
+    "homePage": "https://github.com/NarpasSword/st-breeze-player"
+}
